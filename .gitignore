@@ -1,0 +1,22 @@
+# Maven / Java
+target/
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/
+*.log
+.idea/
+*.iml
+*.class
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IntelliJ
+/out/
+
+# Don't allow AI kibble
+.claude
+CLAUDE.md
+AGENTS.md
+GEMENI.md
+
