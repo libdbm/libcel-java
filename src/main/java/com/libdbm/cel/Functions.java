@@ -1,10 +1,7 @@
 package com.libdbm.cel;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
+import java.lang.reflect.Method;
 import java.util.List;
-import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -76,38 +73,78 @@ class EvaluationError extends RuntimeException {
  * functionality.
  */
 class StandardFunctions implements Functions {
+  private static boolean isAssignable(final Class<?> paramType, final Class<?> argType) {
+    if (paramType.isAssignableFrom(argType)) return true;
+    // Handle primitive to wrapper compatibility
+    if (paramType.isPrimitive()) {
+      return (paramType == boolean.class && argType == Boolean.class)
+          || (paramType == byte.class && (argType == Byte.class))
+          || (paramType == short.class && (argType == Short.class || argType == Byte.class))
+          || (paramType == char.class && argType == Character.class)
+          || (paramType == int.class
+              && (argType == Integer.class
+                  || argType == Short.class
+                  || argType == Byte.class
+                  || argType == Character.class))
+          || (paramType == long.class
+              && (argType == Long.class
+                  || argType == Integer.class
+                  || argType == Short.class
+                  || argType == Byte.class
+                  || argType == Character.class))
+          || (paramType == float.class
+              && (argType == Float.class
+                  || argType == Long.class
+                  || argType == Integer.class
+                  || argType == Short.class
+                  || argType == Byte.class
+                  || argType == Character.class))
+          || (paramType == double.class
+              && (argType == Double.class
+                  || argType == Float.class
+                  || argType == Long.class
+                  || argType == Integer.class
+                  || argType == Short.class
+                  || argType == Byte.class
+                  || argType == Character.class));
+    }
+    // Allow wrapper param accepting primitive arg type (should be covered by assignableFrom
+    // normally)
+    return false;
+  }
+
   @Override
   public Object callFunction(final String name, final List<Object> args) {
     return switch (name) {
-      case "size" -> size(args.get(0));
-      case "int" -> toInt(args.get(0));
-      case "uint" -> toUint(args.get(0));
-      case "double" -> toDouble(args.get(0));
-      case "string" -> asString(args.get(0));
-      case "bool" -> toBool(args.get(0));
-      case "type" -> getType(args.get(0));
+      case "size" -> Utilities.sizeOf(args.get(0));
+      case "int" -> Utilities.asInt(args.get(0));
+      case "uint" -> Utilities.asUInt(args.get(0));
+      case "double" -> Utilities.asDouble(args.get(0));
+      case "string" -> Utilities.asString(args.get(0));
+      case "bool" -> Utilities.asBool(args.get(0));
+      case "type" -> Utilities.typeOf(args.get(0));
       case "has" -> {
         if (args.size() != 2) {
           throw new IllegalArgumentException("has() requires 2 arguments");
         }
-        yield has(args.get(0), args.get(1));
+        yield Utilities.has(args.get(0), args.get(1));
       }
       case "matches" -> {
         if (args.size() != 2) {
           throw new IllegalArgumentException("matches() requires 2 arguments");
         }
-        yield matches((String) args.get(0), (String) args.get(1));
+        yield Utilities.matches((String) args.get(0), (String) args.get(1));
       }
-      case "timestamp" -> timestamp(!args.isEmpty() ? args.get(0) : null);
-      case "duration" -> duration((String) args.get(0));
-      case "getDate" -> getDate(args.get(0));
-      case "getMonth" -> getMonth(args.get(0));
-      case "getFullYear" -> getFullYear(args.get(0));
-      case "getHours" -> getHours(args.get(0));
-      case "getMinutes" -> getMinutes(args.get(0));
-      case "getSeconds" -> getSeconds(args.get(0));
-      case "max" -> max(args);
-      case "min" -> min(args);
+      case "timestamp" -> Utilities.timestamp(!args.isEmpty() ? args.get(0) : null);
+      case "duration" -> Utilities.duration((String) args.get(0));
+      case "getDate" -> Utilities.dateOf(args.get(0));
+      case "getMonth" -> Utilities.monthOf(args.get(0));
+      case "getFullYear" -> Utilities.yearOf(args.get(0));
+      case "getHours" -> Utilities.hoursOf(args.get(0));
+      case "getMinutes" -> Utilities.minutesOf(args.get(0));
+      case "getSeconds" -> Utilities.secondsOf(args.get(0));
+      case "max" -> Utilities.max(args);
+      case "min" -> Utilities.min(args);
       default -> throw new IllegalArgumentException("Unknown function: " + name);
     };
   }
@@ -175,269 +212,66 @@ class StandardFunctions implements Functions {
         }
         throw new IllegalArgumentException("split() requires string target and separator");
       }
-      case "size" -> size(target);
+      case "size" -> Utilities.sizeOf(target);
       // Macro functions are handled in the interpreter with special logic
       case "map", "filter", "all", "exists", "existsOne" ->
           throw new EvaluationError(
               "Macro function " + method + " was not properly handled by the interpreter");
-      default -> throw new IllegalArgumentException("Unknown method: " + method);
+      default -> callJavaMethod(target, method, args);
     };
   }
 
-  private int size(final Object value) {
-    if (value == null) {
-      return 0;
-    }
-    if (value instanceof String str) {
-      return str.length();
-    }
-    if (value instanceof List<?> list) {
-      return list.size();
-    }
-    if (value instanceof Map<?, ?> map) {
-      return map.size();
-    }
-    throw new IllegalArgumentException(
-        "size() not supported for type: " + value.getClass().getName());
-  }
-
-  private long toInt(final Object value) {
-    if (value instanceof Long l) {
-      return l;
-    }
-    if (value instanceof Integer i) {
-      return i.longValue();
-    }
-    if (value instanceof Double d) {
-      return d.longValue();
-    }
-    if (value instanceof Float f) {
-      return f.longValue();
-    }
-    if (value instanceof String str) {
-      return Long.parseLong(str);
-    }
-    if (value instanceof Boolean b) {
-      return b ? 1L : 0L;
-    }
-    throw new IllegalArgumentException("Cannot convert to int: " + value);
-  }
-
-  private long toUint(final Object value) {
-    final long result = toInt(value);
-    if (result < 0) {
-      throw new IllegalArgumentException("Cannot convert negative value to uint: " + value);
-    }
-    return result;
-  }
-
-  private double toDouble(final Object value) {
-    if (value instanceof Double d) {
-      return d;
-    }
-    if (value instanceof Float f) {
-      return f.doubleValue();
-    }
-    if (value instanceof Long l) {
-      return l.doubleValue();
-    }
-    if (value instanceof Integer i) {
-      return i.doubleValue();
-    }
-    if (value instanceof String str) {
-      return Double.parseDouble(str);
-    }
-    throw new IllegalArgumentException("Cannot convert to double: " + value);
-  }
-
-  private String asString(final Object value) {
-    if (value == null) {
-      return "null";
-    }
-    return value.toString();
-  }
-
-  private boolean toBool(final Object value) {
-    if (value instanceof Boolean b) {
-      return b;
-    }
-    if (value instanceof Long l) {
-      return l != 0L;
-    }
-    if (value instanceof Integer i) {
-      return i != 0;
-    }
-    if (value instanceof Double d) {
-      return d != 0.0;
-    }
-    if (value instanceof Float f) {
-      return f != 0.0f;
-    }
-    if (value instanceof String str) {
-      return !str.isEmpty();
-    }
-    if (value instanceof List<?> list) {
-      return !list.isEmpty();
-    }
-    if (value instanceof Map<?, ?> map) {
-      return !map.isEmpty();
-    }
-    return value != null;
-  }
-
-  private String getType(final Object value) {
-    if (value == null) {
-      return "null";
-    }
-    if (value instanceof Boolean) {
-      return "bool";
-    }
-    if (value instanceof Long || value instanceof Integer) {
-      return "int";
-    }
-    if (value instanceof Double || value instanceof Float) {
-      return "double";
-    }
-    if (value instanceof String) {
-      return "string";
-    }
-    if (value instanceof List) {
-      return "list";
-    }
-    if (value instanceof Map) {
-      return "map";
-    }
-    return "unknown";
-  }
-
-  private boolean has(final Object target, final Object field) {
-    if (target instanceof Map<?, ?> map && field instanceof String key) {
-      return map.containsKey(key);
-    }
-    return false;
-  }
-
-  private boolean matches(final String text, final String pattern) {
-    final var regex = Pattern.compile(pattern);
-    return regex.matcher(text).find();
-  }
-
-  private Instant timestamp(final Object value) {
-    if (value == null) {
-      return Instant.now();
-    }
-    if (value instanceof String str) {
-      return Instant.parse(str);
-    }
-    if (value instanceof Long millis) {
-      return Instant.ofEpochMilli(millis);
-    }
-    if (value instanceof Integer millis) {
-      return Instant.ofEpochMilli(millis.longValue());
-    }
-    throw new IllegalArgumentException("Invalid timestamp value: " + value);
-  }
-
-  private Duration duration(final String value) {
-    final var regex = Pattern.compile("^(\\d+)([hms])$");
-    final var matcher = regex.matcher(value);
-    if (!matcher.matches()) {
-      throw new IllegalArgumentException("Invalid duration format: " + value);
-    }
-
-    final int amount = Integer.parseInt(matcher.group(1));
-    final String unit = matcher.group(2);
-
-    return switch (unit) {
-      case "h" -> Duration.ofHours(amount);
-      case "m" -> Duration.ofMinutes(amount);
-      case "s" -> Duration.ofSeconds(amount);
-      default -> throw new IllegalArgumentException("Invalid duration unit: " + unit);
-    };
-  }
-
-  private int getDate(final Object value) {
-    final var instant = value instanceof Instant i ? i : timestamp(value);
-    final var date = instant.atZone(ZoneId.systemDefault());
-    return date.getDayOfMonth();
-  }
-
-  private int getMonth(final Object value) {
-    final var instant = value instanceof Instant i ? i : timestamp(value);
-    final var date = instant.atZone(ZoneId.systemDefault());
-    return date.getMonthValue() - 1;
-  }
-
-  private int getFullYear(final Object value) {
-    final var instant = value instanceof Instant i ? i : timestamp(value);
-    final var date = instant.atZone(ZoneId.systemDefault());
-    return date.getYear();
-  }
-
-  private int getHours(final Object value) {
-    final var instant = value instanceof Instant i ? i : timestamp(value);
-    final var date = instant.atZone(ZoneId.systemDefault());
-    return date.getHour();
-  }
-
-  private int getMinutes(final Object value) {
-    final var instant = value instanceof Instant i ? i : timestamp(value);
-    final var date = instant.atZone(ZoneId.systemDefault());
-    return date.getMinute();
-  }
-
-  private int getSeconds(final Object value) {
-    final var instant = value instanceof Instant i ? i : timestamp(value);
-    final var date = instant.atZone(ZoneId.systemDefault());
-    return date.getSecond();
-  }
-
-  private Object max(final List<Object> values) {
-    if (values.isEmpty()) {
-      throw new IllegalArgumentException("max() requires at least one argument");
-    }
-
-    var result = values.get(0);
-    for (int i = 1; i < values.size(); i++) {
-      if (compare(values.get(i), result) > 0) {
-        result = values.get(i);
+  private Object callJavaMethod(
+      final Object target, final String name, final List<Object> parameters) {
+    try {
+      final var clazz = target.getClass();
+      final var args = parameters.toArray();
+      Method method = null;
+      search:
+      for (final var m : clazz.getMethods()) {
+        if (!m.getName().equals(name)) continue;
+        final var types = m.getParameterTypes();
+        if (types.length != args.length) continue;
+        for (int i = 0; i < types.length; i++) {
+          final Object a = args[i];
+          if (a == null) {
+            if (types[i].isPrimitive()) {
+              continue search;
+            }
+          } else if (!isAssignable(types[i], a.getClass())) {
+            continue search;
+          }
+        }
+        method = m;
+        break;
       }
-    }
-    return result;
-  }
 
-  private Object min(final List<Object> values) {
-    if (values.isEmpty()) {
-      throw new IllegalArgumentException("min() requires at least one argument");
-    }
-
-    var result = values.get(0);
-    for (int i = 1; i < values.size(); i++) {
-      if (compare(values.get(i), result) < 0) {
-        result = values.get(i);
+      if (method == null) {
+        throw new IllegalArgumentException(
+            "No such method '"
+                + name
+                + "' on type "
+                + clazz.getName()
+                + " with "
+                + parameters.size()
+                + " argument(s)");
       }
-    }
-    return result;
-  }
-
-  @SuppressWarnings("unchecked")
-  private int compare(final Object a, final Object b) {
-    if (a instanceof Number na && b instanceof Number nb) {
-      return Double.compare(na.doubleValue(), nb.doubleValue());
-    }
-    if (a instanceof String sa && b instanceof String sb) {
-      return sa.compareTo(sb);
-    }
-    if (a instanceof Instant ia && b instanceof Instant ib) {
-      return ia.compareTo(ib);
-    }
-    if (a instanceof Comparable<?> ca && b instanceof Comparable<?> cb) {
       try {
-        return ((Comparable<Object>) ca).compareTo(cb);
-      } catch (ClassCastException e) {
-        throw new IllegalArgumentException("Cannot compare values of different types");
+        method.setAccessible(true);
+        return method.invoke(target, args);
+      } catch (Throwable e) {
+        throw new EvaluationError(
+            "Invocation of method '"
+                + name
+                + "' on type "
+                + clazz.getName()
+                + " failed: "
+                + e.getMessage());
       }
+    } catch (IllegalArgumentException e) {
+      throw e;
+    } catch (Throwable t) {
+      throw new EvaluationError("Invocation of method '" + name + "' failed: " + t.getMessage());
     }
-    throw new IllegalArgumentException("Cannot compare values of different types");
   }
 }
