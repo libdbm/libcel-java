@@ -1,0 +1,30 @@
+name: Java CI and Publish to GitHub Packages
+on:
+  push:
+    tags:
+      - 'v*'        # publish on tag pushes like v1.0.0; change to 'branches: [main]' to publish on main
+  workflow_dispatch:
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # allow publishing packages
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          server-id: github               # must match <id> in pom's distributionManagement
+          server-username: ${{ github.actor }}
+          server-password: ${{ secrets.MAVEN_PKG_TOKEN != '' && secrets.MAVEN_PKG_TOKEN || secrets.GITHUB_TOKEN }}
+          settings-path: ${{ github.workspace }}  # writes settings.xml here
+
+      - name: Build and deploy
+        run: mvn -B deploy --settings ${{ github.workspace }}/settings.xml

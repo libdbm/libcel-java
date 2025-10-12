@@ -7,7 +7,7 @@
 
     <groupId>com.libdbm</groupId>
     <artifactId>libcel-java</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.0</version>
     <packaging>jar</packaging>
 
     <name>libcel-java</name>
@@ -111,7 +111,18 @@
         </plugins>
     </build>
 
-    <!-- Distribution Management: uncomment/adjust when you are ready to deploy -->
+    <!--
+        Distribution Management
+            - Publish to github packages
+            - Publish to maven central.
+    -->
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/libdbm/libcel-java</url>
+        </repository>
+    </distributionManagement>
     <!--
     <distributionManagement>
       <snapshotRepository>
