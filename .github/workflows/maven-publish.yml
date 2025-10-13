@@ -45,6 +45,16 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
+      # diagnostics + explicit settings
+      - name: Check OSSRH secrets availability
+        run: |
+          if [ -z "${{ secrets.OSSRH_USERNAME }}" ] || [ -z "${{ secrets.OSSRH_PASSWORD }}" ]; then
+            echo "ERROR: OSSRH_USERNAME or OSSRH_PASSWORD is not available to this run."
+            exit 1
+          else
+            echo "OSSRH secrets are present."
+          fi
+      
       - name: Deploy to OSSRH (release or snapshot)
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
