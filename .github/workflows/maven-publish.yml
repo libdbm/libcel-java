@@ -40,10 +40,13 @@ jobs:
           distribution: temurin
           java-version: 17
           server-id: ossrh
-          server-username: ${{ secrets.OSSRH_USERNAME }}
-          server-password: ${{ secrets.OSSRH_PASSWORD }}
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
+        env:
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
 
       # diagnostics + explicit settings
       - name: Check OSSRH secrets availability
@@ -59,10 +62,22 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          set -e
-          # For tag pushes (vX.Y.Z) perform a release deploy; otherwise deploy snapshots to OSSRH snapshot repo
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            mvn -B -Prelease clean deploy -DskipTests
-          else
+          set -eo pipefail
+          VERSION=$(mvn -q -Dexec.cleanupDaemonThreads=false -DforceStdout -Dexpression=project.version help:evaluate | tail -n 1)
+          echo "Project version: $VERSION"
+
+          if [[ "$VERSION" == *-SNAPSHOT ]]; then
+            echo "Detected SNAPSHOT version; deploying to OSSRH snapshot repository."
             mvn -B -DskipTests clean deploy
+          else
+            if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+              echo "Detected release tag ${GITHUB_REF}; deploying a release with signing and staging."
+              mvn -B -Prelease -DskipTests clean deploy
+            else
+              echo "Non-SNAPSHOT version on a non-tag ref. Refusing to deploy to prevent accidental release."
+              echo "Either:"
+              echo " - Update pom.xml version to end with -SNAPSHOT for snapshot deployments from main, or"
+              echo " - Push a tag like v1.0.1 to trigger a signed/staged release."
+              exit 1
+            fi
           fi
