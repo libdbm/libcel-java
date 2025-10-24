@@ -242,3 +242,58 @@ BSD 3-Clause License
 
 - Based on the [Common Expression Language](https://github.com/google/cel-spec) specification by Google
 - Ported from the [Dart libcel](https://pub.dev/packages/libcel) implementation
+
+
+## Releases and Snapshots
+
+This project is configured to publish both release (non-SNAPSHOT) and snapshot artifacts to OSSRH via GitHub Actions.
+The workflow file is at .github/workflows/maven-publish.yml.
+
+Prerequisites
+- Secrets configured in the repository settings:
+  - OSSRH_USERNAME and OSSRH_PASSWORD
+  - GPG_PRIVATE_KEY and GPG_PASSPHRASE (ASCII-armored key)
+- GitHub Actions permissions allow pushing commits and tags using GITHUB_TOKEN (default for same-repo workflows).
+
+How publishing works
+- On main (or when manually dispatched), the workflow inspects the current POM version.
+  - If the version ends with -SNAPSHOT, it deploys to the OSSRH snapshots repository.
+  - If the version is a non-SNAPSHOT (e.g., 1.2.3), it will:
+    1) Create and push an annotated tag v<version> if it doesn’t already exist.
+    2) Perform a signed, staged deploy using the release profile to OSSRH (Maven Central flow).
+    3) Compute the next development version by incrementing the patch by default and set it to <next>-SNAPSHOT in pom.xml.
+    4) Commit and push the bumped pom.xml back to main with a [skip ci] commit message.
+- If the workflow is triggered by pushing an existing tag v*, it performs a standard release deployment and exits (no version bump).
+
+Publish a snapshot (to OSSRH snapshots)
+Option A — Using main automatically
+1) Ensure pom.xml version ends with -SNAPSHOT (e.g., 1.2.4-SNAPSHOT).
+2) Push your changes to the main branch.
+3) The workflow will run and deploy to the snapshots repo: https://s01.oss.sonatype.org/content/repositories/snapshots/
+
+Option B — Manual run (workflow_dispatch)
+1) Ensure pom.xml version ends with -SNAPSHOT.
+2) In GitHub: Actions → Java CI and Publish → Run workflow → Run.
+3) It will deploy to the OSSRH snapshots repository.
+
+Publish a release (non-SNAPSHOT to Maven Central)
+Option A — From main with auto-tagging and auto-bump
+1) Set pom.xml <version> to a non-SNAPSHOT (e.g., 1.2.4).
+2) Push to main (or trigger the workflow manually).
+3) The workflow will:
+   - Tag the repo with v1.2.4 (idempotent if it already exists), push the tag.
+   - Deploy the release with GPG signing and staging to OSSRH.
+   - Bump pom.xml to the next development version (e.g., 1.2.5-SNAPSHOT) and push that commit back to main.
+
+Option B — By pushing a tag
+1) Create and push a tag that matches v<version> (e.g., v1.2.4); ensure pom.xml reflects that version.
+2) The workflow triggered by the tag will perform the release deploy and exit (no version bump).
+
+Manual trigger (either case)
+- Actions → Java CI and Publish → Run workflow. This supports both release and snapshot flows depending on the POM version and whether a tag triggered the run.
+
+Notes and gotchas
+- Version parsing assumes semantic versions X.Y.Z for computing the next development version. If not strictly semantic, it will fallback by appending .1-SNAPSHOT.
+- The bump commit includes [skip ci] to prevent re-triggering the workflow.
+- distributionManagement in pom.xml already points to OSSRH snapshot and staging endpoints.
+- You can always see what the workflow decided by reading its logs: it prints the detected POM version and the path taken (snapshot vs release).

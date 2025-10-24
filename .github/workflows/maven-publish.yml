@@ -8,6 +8,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,6 +36,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up JDK 17 and configure Maven for OSSRH
         uses: actions/setup-java@v4
@@ -63,21 +69,74 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           set -eo pipefail
-          VERSION=$(mvn -q -Dexec.cleanupDaemonThreads=false -DforceStdout -Dexpression=project.version help:evaluate | tail -n 1)
-          echo "Project version: $VERSION"
 
-          if [[ "$VERSION" == *-SNAPSHOT ]]; then
-            echo "Detected SNAPSHOT version; deploying to OSSRH snapshot repository."
-            mvn -B -DskipTests clean deploy
-          else
-            if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-              echo "Detected release tag ${GITHUB_REF}; deploying a release with signing and staging."
-              mvn -B -Prelease -DskipTests clean deploy
-            else
-              echo "Non-SNAPSHOT version on a non-tag ref. Refusing to deploy to prevent accidental release."
-              echo "Either:"
-              echo " - Update pom.xml version to end with -SNAPSHOT for snapshot deployments from main, or"
-              echo " - Push a tag like v1.0.1 to trigger a signed/staged release."
-              exit 1
+          VERSION=$(mvn -q -Dexec.cleanupDaemonThreads=false -DforceStdout -Dexpression=project.version help:evaluate | tail -n 1)
+          echo "Project version from POM: $VERSION"
+
+          # If this run was triggered by an existing v* tag, perform a release deploy and stop.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "Detected release tag ${GITHUB_REF}; deploying a release with signing and staging."
+            mvn -B -Prelease -DskipTests -Dgpg.passphrase=${GPG_PASSPHRASE} clean deploy
+            exit 0
+          fi
+
+          # On main (or manually triggered), decide flow based on whether version is SNAPSHOT or not.
+          if [[ "${GITHUB_REF}" == "refs/heads/main" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "$VERSION" == *-SNAPSHOT ]]; then
+              echo "Snapshot version detected; deploying to OSSRH snapshot repository."
+              mvn -B -DskipTests clean deploy
+              exit 0
             fi
+
+            # Non-SNAPSHOT version on main: perform automated release tagging, deploy, and then bump to next -SNAPSHOT.
+            echo "Non-SNAPSHOT version on main detected; performing automated release."
+
+            # Configure git for CI pushes
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            TAG="v${VERSION}"
+            echo "Preparing tag ${TAG}"
+
+            # Check if tag already exists remotely
+            if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+              echo "Tag ${TAG} already exists on origin; will not recreate."
+            else
+              echo "Creating and pushing tag ${TAG}"
+              git tag -a "${TAG}" -m "Release ${TAG}"
+              git push origin "${TAG}"
+            fi
+
+            echo "Deploying release ${TAG} with signing and staging."
+            mvn -B -Prelease -DskipTests -Dgpg.passphrase=${GPG_PASSPHRASE} clean deploy
+
+            # Compute next development version and bump POM to -SNAPSHOT
+            NEXT_DEV=""
+            if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              NEXT_DEV="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3]+1))-SNAPSHOT"
+            elif [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+              NEXT_DEV="${BASH_REMATCH[1]}.$((BASH_REMATCH[2]+1))-SNAPSHOT"
+            elif [[ "$VERSION" =~ ^([0-9]+)$ ]]; then
+              NEXT_DEV="$((BASH_REMATCH[1]+1))-SNAPSHOT"
+            else
+              echo "WARN: Could not parse version '$VERSION' semantically; defaulting to append .1-SNAPSHOT"
+              NEXT_DEV="${VERSION}.1-SNAPSHOT"
+            fi
+
+            echo "Bumping project version to ${NEXT_DEV} for next development iteration."
+            mvn -B -DskipTests versions:set -DnewVersion="${NEXT_DEV}" -DgenerateBackupPoms=false
+
+            if ! git diff --quiet -- pom.xml; then
+              git add pom.xml
+              git commit -m "chore(release): start next development iteration ${NEXT_DEV} [skip ci]"
+              git push origin HEAD:main
+              echo "Pushed next development version ${NEXT_DEV} to main."
+            else
+              echo "No changes to pom.xml detected after version bump (unexpected)."
+            fi
+
+            exit 0
+          else
+            echo "Not on a release tag or main; no deployment performed."
+            exit 0
           fi

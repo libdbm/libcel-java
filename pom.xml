@@ -7,7 +7,7 @@
 
     <groupId>com.libdbm</groupId>
     <artifactId>libcel-java</artifactId>
-    <version>1.0.2</version>
+    <version>1.0.3-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>libcel-java</name>
@@ -136,6 +136,7 @@
                                     <goal>sign</goal>
                                 </goals>
                                 <configuration>
+                                    <useAgent>false</useAgent>
                                     <gpgArguments>
                                         <arg>--batch</arg>
                                         <arg>--pinentry-mode</arg>
