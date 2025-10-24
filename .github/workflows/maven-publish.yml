@@ -54,14 +54,46 @@ jobs:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
 
-      # diagnostics + explicit settings
-      - name: Check OSSRH secrets availability
+      - name: Write Maven settings.xml (OSSRH Bearer token preferred)
         run: |
-          if [ -z "${{ secrets.OSSRH_USERNAME }}" ] || [ -z "${{ secrets.OSSRH_PASSWORD }}" ]; then
-            echo "ERROR: OSSRH_USERNAME or OSSRH_PASSWORD is not available to this run."
-            exit 1
+          set -e
+          mkdir -p ~/.m2
+          SETTINGS_FILE=~/.m2/settings.xml
+          echo "Generating Maven settings at $SETTINGS_FILE"
+          if [ -n "${{ secrets.OSSRH_BEARER_TOKEN }}" ]; then
+            XML_OPEN='<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">'
+            XML_BODY='<servers><server><id>ossrh</id><configuration><httpHeaders><property><name>Authorization</name><value>Bearer '
+            XML_TOKEN='${{ secrets.OSSRH_BEARER_TOKEN }}'
+            XML_CLOSE='</value></property></httpHeaders></configuration></server></servers></settings>'
+            printf '%s%s%s%s' "$XML_OPEN" "$XML_BODY" "$XML_TOKEN" "$XML_CLOSE" > "$SETTINGS_FILE"
+            echo "Using OSSRH Bearer token for authenticated deploys."
           else
-            echo "OSSRH secrets are present."
+            if [ -z "${{ secrets.OSSRH_USERNAME }}" ] || [ -z "${{ secrets.OSSRH_PASSWORD }}" ]; then
+              echo "ERROR: Neither OSSRH_BEARER_TOKEN nor username/password is available."
+              exit 1
+            fi
+            XML_OPEN='<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">'
+            XML_BODY='<servers><server><id>ossrh</id><username>'
+            XML_USER='${{ secrets.OSSRH_USERNAME }}'
+            XML_BODY_2='</username><password>'
+            XML_PASS='${{ secrets.OSSRH_PASSWORD }}'
+            XML_CLOSE='</password></server></servers></settings>'
+            printf '%s%s%s%s%s%s' "$XML_OPEN" "$XML_BODY" "$XML_USER" "$XML_BODY_2" "$XML_PASS" "$XML_CLOSE" > "$SETTINGS_FILE"
+            echo "Using OSSRH username/password credentials."
+          fi
+
+      # diagnostics for secrets
+      - name: Check OSSRH auth inputs availability
+        run: |
+          if [ -n "${{ secrets.OSSRH_BEARER_TOKEN }}" ]; then
+            echo "OSSRH_BEARER_TOKEN is present (Bearer auth will be used)."
+          else
+            if [ -z "${{ secrets.OSSRH_USERNAME }}" ] || [ -z "${{ secrets.OSSRH_PASSWORD }}" ]; then
+              echo "ERROR: Missing OSSRH credentials. Provide OSSRH_BEARER_TOKEN or OSSRH_USERNAME/OSSRH_PASSWORD."
+              exit 1
+            else
+              echo "OSSRH username/password are present."
+            fi
           fi
       
       - name: Deploy to OSSRH (release or snapshot)
@@ -70,13 +102,13 @@ jobs:
         run: |
           set -eo pipefail
 
-          VERSION=$(mvn -q -Dexec.cleanupDaemonThreads=false -DforceStdout -Dexpression=project.version help:evaluate | tail -n 1)
+          VERSION=$(mvn -s ~/.m2/settings.xml -q -Dexec.cleanupDaemonThreads=false -DforceStdout -Dexpression=project.version help:evaluate | tail -n 1)
           echo "Project version from POM: $VERSION"
 
           # If this run was triggered by an existing v* tag, perform a release deploy and stop.
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "Detected release tag ${GITHUB_REF}; deploying a release with signing and staging."
-            mvn -B -Prelease -DskipTests -Dgpg.passphrase=${GPG_PASSPHRASE} clean deploy
+            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests -Dgpg.passphrase=${GPG_PASSPHRASE} clean deploy
             exit 0
           fi
 
@@ -84,7 +116,7 @@ jobs:
           if [[ "${GITHUB_REF}" == "refs/heads/main" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ "$VERSION" == *-SNAPSHOT ]]; then
               echo "Snapshot version detected; deploying to OSSRH snapshot repository."
-              mvn -B -DskipTests clean deploy
+              mvn -s ~/.m2/settings.xml -B -DskipTests clean deploy
               exit 0
             fi
 
@@ -108,7 +140,7 @@ jobs:
             fi
 
             echo "Deploying release ${TAG} with signing and staging."
-            mvn -B -Prelease -DskipTests -Dgpg.passphrase=${GPG_PASSPHRASE} clean deploy
+            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests -Dgpg.passphrase=${GPG_PASSPHRASE} clean deploy
 
             # Compute next development version and bump POM to -SNAPSHOT
             NEXT_DEV=""
@@ -124,7 +156,7 @@ jobs:
             fi
 
             echo "Bumping project version to ${NEXT_DEV} for next development iteration."
-            mvn -B -DskipTests versions:set -DnewVersion="${NEXT_DEV}" -DgenerateBackupPoms=false
+            mvn -s ~/.m2/settings.xml -B -DskipTests versions:set -DnewVersion="${NEXT_DEV}" -DgenerateBackupPoms=false
 
             if ! git diff --quiet -- pom.xml; then
               git add pom.xml
