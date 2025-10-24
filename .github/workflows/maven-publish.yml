@@ -40,19 +40,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Set up JDK 17 and configure Maven for OSSRH
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
-          server-id: ossrh
-          server-username: MAVEN_USERNAME
-          server-password: MAVEN_PASSWORD
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
-        env:
-          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
       - name: Write Maven settings.xml (OSSRH Bearer token preferred)
         run: |
@@ -61,24 +55,46 @@ jobs:
           SETTINGS_FILE=~/.m2/settings.xml
           echo "Generating Maven settings at $SETTINGS_FILE"
           if [ -n "${{ secrets.OSSRH_BEARER_TOKEN }}" ]; then
-            XML_OPEN='<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">'
-            XML_BODY='<servers><server><id>ossrh</id><configuration><httpHeaders><property><name>Authorization</name><value>Bearer '
-            XML_TOKEN='${{ secrets.OSSRH_BEARER_TOKEN }}'
-            XML_CLOSE='</value></property></httpHeaders></configuration></server></servers></settings>'
-            printf '%s%s%s%s' "$XML_OPEN" "$XML_BODY" "$XML_TOKEN" "$XML_CLOSE" > "$SETTINGS_FILE"
+            cat > "$SETTINGS_FILE" <<'EOF'
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <servers>
+    <server>
+      <id>ossrh</id>
+      <configuration>
+        <httpHeaders>
+          <property>
+            <name>Authorization</name>
+            <value>Bearer ${{ secrets.OSSRH_BEARER_TOKEN }}</value>
+          </property>
+        </httpHeaders>
+      </configuration>
+    </server>
+  </servers>
+</settings>
+EOF
             echo "Using OSSRH Bearer token for authenticated deploys."
           else
             if [ -z "${{ secrets.OSSRH_USERNAME }}" ] || [ -z "${{ secrets.OSSRH_PASSWORD }}" ]; then
               echo "ERROR: Neither OSSRH_BEARER_TOKEN nor username/password is available."
               exit 1
             fi
-            XML_OPEN='<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">'
-            XML_BODY='<servers><server><id>ossrh</id><username>'
-            XML_USER='${{ secrets.OSSRH_USERNAME }}'
-            XML_BODY_2='</username><password>'
-            XML_PASS='${{ secrets.OSSRH_PASSWORD }}'
-            XML_CLOSE='</password></server></servers></settings>'
-            printf '%s%s%s%s%s%s' "$XML_OPEN" "$XML_BODY" "$XML_USER" "$XML_BODY_2" "$XML_PASS" "$XML_CLOSE" > "$SETTINGS_FILE"
+            cat > "$SETTINGS_FILE" <<EOF
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <servers>
+    <server>
+      <id>ossrh</id>
+      <username>${{ secrets.OSSRH_USERNAME }}</username>
+      <password>${{ secrets.OSSRH_PASSWORD }}</password>
+    </server>
+  </servers>
+</settings>
+EOF
             echo "Using OSSRH username/password credentials."
           fi
 
@@ -98,7 +114,7 @@ jobs:
       
       - name: Deploy to OSSRH (release or snapshot)
         env:
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           set -eo pipefail
 
@@ -108,7 +124,7 @@ jobs:
           # If this run was triggered by an existing v* tag, perform a release deploy and stop.
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "Detected release tag ${GITHUB_REF}; deploying a release with signing and staging."
-            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests -Dgpg.passphrase=${GPG_PASSPHRASE} clean deploy
+            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests clean deploy
             exit 0
           fi
 
@@ -140,7 +156,7 @@ jobs:
             fi
 
             echo "Deploying release ${TAG} with signing and staging."
-            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests -Dgpg.passphrase=${GPG_PASSPHRASE} clean deploy
+            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests clean deploy
 
             # Compute next development version and bump POM to -SNAPSHOT
             NEXT_DEV=""
