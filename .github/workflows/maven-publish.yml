@@ -55,7 +55,7 @@ jobs:
           SETTINGS_FILE=~/.m2/settings.xml
           echo "Generating Maven settings at $SETTINGS_FILE"
           if [ -n "${{ secrets.OSSRH_BEARER_TOKEN }}" ]; then
-            cat > "$SETTINGS_FILE" <<'EOF'
+            cat > "$SETTINGS_FILE" << 'SETTINGS_EOF'
 <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
@@ -67,21 +67,22 @@ jobs:
         <httpHeaders>
           <property>
             <name>Authorization</name>
-            <value>Bearer ${{ secrets.OSSRH_BEARER_TOKEN }}</value>
+            <value>Bearer BEARER_TOKEN_PLACEHOLDER</value>
           </property>
         </httpHeaders>
       </configuration>
     </server>
   </servers>
 </settings>
-EOF
+SETTINGS_EOF
+            sed -i "s|BEARER_TOKEN_PLACEHOLDER|${{ secrets.OSSRH_BEARER_TOKEN }}|g" "$SETTINGS_FILE"
             echo "Using OSSRH Bearer token for authenticated deploys."
           else
             if [ -z "${{ secrets.OSSRH_USERNAME }}" ] || [ -z "${{ secrets.OSSRH_PASSWORD }}" ]; then
               echo "ERROR: Neither OSSRH_BEARER_TOKEN nor username/password is available."
               exit 1
             fi
-            cat > "$SETTINGS_FILE" <<EOF
+            cat > "$SETTINGS_FILE" << 'SETTINGS_EOF'
 <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
@@ -89,12 +90,14 @@ EOF
   <servers>
     <server>
       <id>ossrh</id>
-      <username>${{ secrets.OSSRH_USERNAME }}</username>
-      <password>${{ secrets.OSSRH_PASSWORD }}</password>
+      <username>USERNAME_PLACEHOLDER</username>
+      <password>PASSWORD_PLACEHOLDER</password>
     </server>
   </servers>
 </settings>
-EOF
+SETTINGS_EOF
+            sed -i "s|USERNAME_PLACEHOLDER|${{ secrets.OSSRH_USERNAME }}|g" "$SETTINGS_FILE"
+            sed -i "s|PASSWORD_PLACEHOLDER|${{ secrets.OSSRH_PASSWORD }}|g" "$SETTINGS_FILE"
             echo "Using OSSRH username/password credentials."
           fi
 
