@@ -49,12 +49,16 @@ jobs:
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
       - name: Write Maven settings.xml (OSSRH Bearer token preferred)
+        env:
+          OSSRH_BEARER_TOKEN: ${{ secrets.OSSRH_BEARER_TOKEN }}
+          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
         run: |
           set -e
           mkdir -p ~/.m2
           SETTINGS_FILE=~/.m2/settings.xml
           echo "Generating Maven settings at $SETTINGS_FILE"
-          if [ -n "${{ secrets.OSSRH_BEARER_TOKEN }}" ]; then
+          if [ -n "$OSSRH_BEARER_TOKEN" ]; then
             echo '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"' > "$SETTINGS_FILE"
             echo '          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"' >> "$SETTINGS_FILE"
             echo '          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0' >> "$SETTINGS_FILE"
@@ -66,7 +70,7 @@ jobs:
             echo '        <httpHeaders>' >> "$SETTINGS_FILE"
             echo '          <property>' >> "$SETTINGS_FILE"
             echo '            <name>Authorization</name>' >> "$SETTINGS_FILE"
-            echo "            <value>Bearer ${{ secrets.OSSRH_BEARER_TOKEN }}</value>" >> "$SETTINGS_FILE"
+            echo "            <value>Bearer ${OSSRH_BEARER_TOKEN}</value>" >> "$SETTINGS_FILE"
             echo '          </property>' >> "$SETTINGS_FILE"
             echo '        </httpHeaders>' >> "$SETTINGS_FILE"
             echo '      </configuration>' >> "$SETTINGS_FILE"
@@ -75,7 +79,7 @@ jobs:
             echo '</settings>' >> "$SETTINGS_FILE"
             echo "Using OSSRH Bearer token for authenticated deploys."
           else
-            if [ -z "${{ secrets.OSSRH_USERNAME }}" ] || [ -z "${{ secrets.OSSRH_PASSWORD }}" ]; then
+            if [ -z "$OSSRH_USERNAME" ] || [ -z "$OSSRH_PASSWORD" ]; then
               echo "ERROR: Neither OSSRH_BEARER_TOKEN nor username/password is available."
               exit 1
             fi
@@ -86,8 +90,8 @@ jobs:
             echo '  <servers>' >> "$SETTINGS_FILE"
             echo '    <server>' >> "$SETTINGS_FILE"
             echo '      <id>ossrh</id>' >> "$SETTINGS_FILE"
-            echo "      <username>${{ secrets.OSSRH_USERNAME }}</username>" >> "$SETTINGS_FILE"
-            echo "      <password>${{ secrets.OSSRH_PASSWORD }}</password>" >> "$SETTINGS_FILE"
+            echo "      <username>${OSSRH_USERNAME}</username>" >> "$SETTINGS_FILE"
+            echo "      <password>${OSSRH_PASSWORD}</password>" >> "$SETTINGS_FILE"
             echo '    </server>' >> "$SETTINGS_FILE"
             echo '  </servers>' >> "$SETTINGS_FILE"
             echo '</settings>' >> "$SETTINGS_FILE"
@@ -96,16 +100,41 @@ jobs:
 
       # diagnostics for secrets
       - name: Check OSSRH auth inputs availability
+        env:
+          OSSRH_BEARER_TOKEN: ${{ secrets.OSSRH_BEARER_TOKEN }}
+          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
         run: |
-          if [ -n "${{ secrets.OSSRH_BEARER_TOKEN }}" ]; then
+          if [ -n "$OSSRH_BEARER_TOKEN" ]; then
             echo "OSSRH_BEARER_TOKEN is present (Bearer auth will be used)."
           else
-            if [ -z "${{ secrets.OSSRH_USERNAME }}" ] || [ -z "${{ secrets.OSSRH_PASSWORD }}" ]; then
+            if [ -z "$OSSRH_USERNAME" ] || [ -z "$OSSRH_PASSWORD" ]; then
               echo "ERROR: Missing OSSRH credentials. Provide OSSRH_BEARER_TOKEN or OSSRH_USERNAME/OSSRH_PASSWORD."
               exit 1
             else
               echo "OSSRH username/password are present."
+              echo "Username length: ${#OSSRH_USERNAME}"
+              echo "Password length: ${#OSSRH_PASSWORD}"
             fi
+          fi
+
+      - name: Verify settings.xml was created
+        run: |
+          if [ -f ~/.m2/settings.xml ]; then
+            echo "settings.xml exists"
+            echo "File size: $(wc -c < ~/.m2/settings.xml) bytes"
+            echo "First few lines:"
+            head -n 5 ~/.m2/settings.xml
+            echo "Checking for server config..."
+            if grep -q "<server>" ~/.m2/settings.xml; then
+              echo "Server configuration found"
+            else
+              echo "ERROR: No server configuration in settings.xml"
+              exit 1
+            fi
+          else
+            echo "ERROR: settings.xml was not created"
+            exit 1
           fi
       
       - name: Deploy to OSSRH (release or snapshot)
