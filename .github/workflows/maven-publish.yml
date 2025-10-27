@@ -50,6 +50,8 @@ jobs:
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           gpg --list-secret-keys --keyid-format LONG
@@ -114,7 +116,7 @@ jobs:
             echo "ERROR: settings.xml was not created"
             exit 1
           fi
-      
+
       - name: Deploy to OSSRH (release or snapshot)
         env:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
