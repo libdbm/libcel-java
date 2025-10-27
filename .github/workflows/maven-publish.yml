@@ -129,7 +129,7 @@ jobs:
           # If this run was triggered by an existing v* tag, perform a release deploy and stop.
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "Detected release tag ${GITHUB_REF}; deploying a release with signing and staging."
-            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests clean deploy
+            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests -Dgpg.passphrase="${{ secrets.GPG_PASSPHRASE }}" clean deploy
             exit 0
           fi
 
@@ -137,7 +137,7 @@ jobs:
           if [[ "${GITHUB_REF}" == "refs/heads/main" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ "$VERSION" == *-SNAPSHOT ]]; then
               echo "Snapshot version detected; deploying to OSSRH snapshot repository."
-              mvn -s ~/.m2/settings.xml -B -DskipTests clean deploy
+              mvn -s ~/.m2/settings.xml -B -DskipTests -Dgpg.passphrase="${{ secrets.GPG_PASSPHRASE }}" clean deploy
               exit 0
             fi
 
@@ -161,7 +161,7 @@ jobs:
             fi
 
             echo "Deploying release ${TAG} with signing and staging."
-            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests clean deploy
+            mvn -s ~/.m2/settings.xml -B -Prelease -DskipTests -Dgpg.passphrase="${{ secrets.GPG_PASSPHRASE }}" clean deploy
 
             # Compute next development version and bump POM to -SNAPSHOT
             NEXT_DEV=""
