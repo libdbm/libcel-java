@@ -50,9 +50,18 @@ jobs:
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          # Configure GPG for non-interactive use
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          echo "use-agent" >> ~/.gnupg/gpg.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+
+          # Import the key with passphrase
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --import
+
+          # Verify import succeeded
           gpg --list-secret-keys --keyid-format LONG
 
       - name: Write Maven settings.xml for Central Portal
