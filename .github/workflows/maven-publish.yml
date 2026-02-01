@@ -51,18 +51,46 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
+          set -e
+
+          # Check if secrets are available
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "ERROR: GPG_PRIVATE_KEY secret is empty or not accessible"
+            echo "For organization secrets, ensure this repository has access"
+            exit 1
+          fi
+          echo "GPG_PRIVATE_KEY is present (length: ${#GPG_PRIVATE_KEY})"
+
+          if [ -z "$GPG_PASSPHRASE" ]; then
+            echo "ERROR: GPG_PASSPHRASE secret is empty or not accessible"
+            exit 1
+          fi
+          echo "GPG_PASSPHRASE is present (length: ${#GPG_PASSPHRASE})"
+
           # Configure GPG for non-interactive use
           mkdir -p ~/.gnupg
           chmod 700 ~/.gnupg
           echo "use-agent" >> ~/.gnupg/gpg.conf
           echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
           echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          chmod 600 ~/.gnupg/gpg.conf ~/.gnupg/gpg-agent.conf
+
+          # Restart gpg-agent to pick up config
+          gpgconf --kill gpg-agent || true
 
           # Import the key with passphrase
           echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" --import
 
           # Verify import succeeded
+          echo "Listing secret keys after import:"
           gpg --list-secret-keys --keyid-format LONG
+
+          # Verify at least one key exists
+          if ! gpg --list-secret-keys 2>/dev/null | grep -q "sec"; then
+            echo "ERROR: No secret keys found after import"
+            exit 1
+          fi
+          echo "GPG key import successful"
 
       - name: Write Maven settings.xml for Central Portal
         env:
