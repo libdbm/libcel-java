@@ -11,6 +11,10 @@ import java.util.Map;
  *
  * <p>Implements the Visitor pattern to traverse and evaluate the AST produced by the parser.
  * Supports all CEL operations including macros, type conversions, and complex expressions.
+ *
+ * <p><b>Note:</b> This class is NOT thread-safe. Each thread should use its own Interpreter
+ * instance, or synchronize externally when sharing. The variables map is mutable and modified
+ * during macro evaluation.
  */
 public class Interpreter implements Expression.Visitor<Object> {
   private final Map<String, Object> variables;
@@ -330,7 +334,7 @@ public class Interpreter implements Expression.Visitor<Object> {
       case ADD -> {
         // String concatenation
         if (left instanceof String || right instanceof String) {
-          yield String.valueOf(left) + right;
+          yield String.valueOf(left) + String.valueOf(right);
         }
         // List concatenation
         if (left instanceof List<?> l && right instanceof List<?> r) {

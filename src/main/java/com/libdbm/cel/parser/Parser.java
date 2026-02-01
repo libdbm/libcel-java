@@ -60,9 +60,11 @@ enum TokenType {
 public class Parser {
   private static final Set<String> MACRO_METHODS =
       Set.of("map", "filter", "all", "exists", "existsOne");
+  private static final int MAX_DEPTH = 256;
 
   private final Lexer lexer;
   private Token current;
+  private int depth = 0;
 
   /**
    * Constructs a new Parser with the specified input string.
@@ -93,16 +95,23 @@ public class Parser {
 
   // expr = conditionalOr ( '?' conditionalOr ':' expr )?
   private Expression parseExpr() {
-    final var condition = parseConditionalOr();
-
-    if (match(TokenType.QUESTION)) {
-      final var then = parseConditionalOr();
-      expect(TokenType.COLON);
-      final var otherwise = parseExpr();
-      return new Conditional(condition, then, otherwise);
+    if (++depth > MAX_DEPTH) {
+      throw new ParseError("Expression nesting too deep", current.line(), current.column());
     }
+    try {
+      final var condition = parseConditionalOr();
 
-    return condition;
+      if (match(TokenType.QUESTION)) {
+        final var then = parseConditionalOr();
+        expect(TokenType.COLON);
+        final var otherwise = parseExpr();
+        return new Conditional(condition, then, otherwise);
+      }
+
+      return condition;
+    } finally {
+      depth--;
+    }
   }
 
   // conditionalOr = conditionalAnd ( '||' conditionalAnd )*
@@ -563,8 +572,8 @@ public class Parser {
             i += 2;
           }
           case 'x' -> {
-            // Hexadecimal escape: backslash-x-HH
-            if (i + 3 < value.length()) {
+            // Hexadecimal escape: backslash-x-HH (4 chars total)
+            if (i + 4 <= value.length()) {
               final var hex = value.substring(i + 2, i + 4);
               result.append((char) Integer.parseInt(hex, 16));
               i += 4;
@@ -574,8 +583,8 @@ public class Parser {
             }
           }
           case 'u' -> {
-            // Unicode escape: backslash-u-HHHH
-            if (i + 5 < value.length()) {
+            // Unicode escape: backslash-u-HHHH (6 chars total)
+            if (i + 6 <= value.length()) {
               final var hex = value.substring(i + 2, i + 6);
               result.append((char) Integer.parseInt(hex, 16));
               i += 6;
@@ -585,8 +594,8 @@ public class Parser {
             }
           }
           case 'U' -> {
-            // Unicode escape: backslash-U-HHHHHHHH
-            if (i + 9 < value.length()) {
+            // Unicode escape: backslash-U-HHHHHHHH (10 chars total)
+            if (i + 10 <= value.length()) {
               final var hex = value.substring(i + 2, i + 10);
               final var codePoint = Integer.parseInt(hex, 16);
               result.appendCodePoint(codePoint);
@@ -725,6 +734,8 @@ public class Parser {
 
 /** Lexer for tokenizing CEL expressions. */
 class Lexer {
+  private static final int MAX_LOOKAHEAD = 100;
+
   private final String input;
   private final List<Token> lookahead;
   private int position;
@@ -747,6 +758,9 @@ class Lexer {
   }
 
   public Token peek(final int count) {
+    if (count > MAX_LOOKAHEAD) {
+      throw new ParseError("Lookahead exceeded maximum of " + MAX_LOOKAHEAD, line, column);
+    }
     while (lookahead.size() < count) {
       lookahead.add(token());
     }
@@ -772,8 +786,8 @@ class Lexer {
     }
   }
 
-  private void forward(int n) {
-    for (int i = 0; i < n; i++) {
+  private void forward(final int n) {
+    for (var i = 0; i < n; i++) {
       step();
     }
   }

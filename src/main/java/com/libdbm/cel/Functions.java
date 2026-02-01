@@ -1,5 +1,6 @@
 package com.libdbm.cel;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -116,13 +117,48 @@ class StandardFunctions implements Functions {
   @Override
   public Object callFunction(final String name, final List<Object> args) {
     return switch (name) {
-      case "size" -> Utilities.sizeOf(args.get(0));
-      case "int" -> Utilities.asInt(args.get(0));
-      case "uint" -> Utilities.asUInt(args.get(0));
-      case "double" -> Utilities.asDouble(args.get(0));
-      case "string" -> Utilities.asString(args.get(0));
-      case "bool" -> Utilities.asBool(args.get(0));
-      case "type" -> Utilities.typeOf(args.get(0));
+      case "size" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("size() requires 1 argument");
+        }
+        yield Utilities.sizeOf(args.get(0));
+      }
+      case "int" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("int() requires 1 argument");
+        }
+        yield Utilities.asInt(args.get(0));
+      }
+      case "uint" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("uint() requires 1 argument");
+        }
+        yield Utilities.asUInt(args.get(0));
+      }
+      case "double" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("double() requires 1 argument");
+        }
+        yield Utilities.asDouble(args.get(0));
+      }
+      case "string" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("string() requires 1 argument");
+        }
+        yield Utilities.asString(args.get(0));
+      }
+      case "bool" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("bool() requires 1 argument");
+        }
+        yield Utilities.asBool(args.get(0));
+      }
+      case "type" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("type() requires 1 argument");
+        }
+        yield Utilities.typeOf(args.get(0));
+      }
       case "has" -> {
         if (args.size() != 2) {
           throw new IllegalArgumentException("has() requires 2 arguments");
@@ -136,13 +172,48 @@ class StandardFunctions implements Functions {
         yield Utilities.matches((String) args.get(0), (String) args.get(1));
       }
       case "timestamp" -> Utilities.timestamp(!args.isEmpty() ? args.get(0) : null);
-      case "duration" -> Utilities.duration((String) args.get(0));
-      case "getDate" -> Utilities.dateOf(args.get(0));
-      case "getMonth" -> Utilities.monthOf(args.get(0));
-      case "getFullYear" -> Utilities.yearOf(args.get(0));
-      case "getHours" -> Utilities.hoursOf(args.get(0));
-      case "getMinutes" -> Utilities.minutesOf(args.get(0));
-      case "getSeconds" -> Utilities.secondsOf(args.get(0));
+      case "duration" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("duration() requires 1 argument");
+        }
+        yield Utilities.duration((String) args.get(0));
+      }
+      case "getDate" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("getDate() requires 1 argument");
+        }
+        yield Utilities.dateOf(args.get(0));
+      }
+      case "getMonth" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("getMonth() requires 1 argument");
+        }
+        yield Utilities.monthOf(args.get(0));
+      }
+      case "getFullYear" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("getFullYear() requires 1 argument");
+        }
+        yield Utilities.yearOf(args.get(0));
+      }
+      case "getHours" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("getHours() requires 1 argument");
+        }
+        yield Utilities.hoursOf(args.get(0));
+      }
+      case "getMinutes" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("getMinutes() requires 1 argument");
+        }
+        yield Utilities.minutesOf(args.get(0));
+      }
+      case "getSeconds" -> {
+        if (args.isEmpty()) {
+          throw new IllegalArgumentException("getSeconds() requires 1 argument");
+        }
+        yield Utilities.secondsOf(args.get(0));
+      }
       case "max" -> Utilities.max(args);
       case "min" -> Utilities.min(args);
       default -> throw new IllegalArgumentException("Unknown function: " + name);
@@ -256,22 +327,19 @@ class StandardFunctions implements Functions {
                 + parameters.size()
                 + " argument(s)");
       }
-      try {
-        method.setAccessible(true);
-        return method.invoke(target, args);
-      } catch (Throwable e) {
-        throw new EvaluationError(
-            "Invocation of method '"
-                + name
-                + "' on type "
-                + clazz.getName()
-                + " failed: "
-                + e.getMessage());
-      }
-    } catch (IllegalArgumentException e) {
+
+      method.setAccessible(true);
+      return method.invoke(target, args);
+    } catch (final IllegalArgumentException e) {
       throw e;
-    } catch (Throwable t) {
-      throw new EvaluationError("Invocation of method '" + name + "' failed: " + t.getMessage());
+    } catch (final IllegalAccessException e) {
+      throw new EvaluationError("Cannot access method '" + name + "': " + e.getMessage());
+    } catch (final InvocationTargetException e) {
+      final var cause = e.getCause();
+      throw new EvaluationError(
+          "Method '" + name + "' threw: " + (cause != null ? cause.getMessage() : e.getMessage()));
+    } catch (final Exception e) {
+      throw new EvaluationError("Failed to invoke method '" + name + "': " + e.getMessage());
     }
   }
 }
