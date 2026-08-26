@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.libdbm.cel.ast.*;
 import com.libdbm.cel.parser.ParseError;
 import com.libdbm.cel.parser.Parser;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -168,12 +169,12 @@ class ParserTests {
     final Parser parser1 = new Parser("b\"bytes\"");
     final Expression expr1 = parser1.parse();
     assertInstanceOf(Literal.class, expr1);
-    assertEquals("bytes", ((Literal) expr1).value());
+    assertArrayEquals("bytes".getBytes(StandardCharsets.UTF_8), (byte[]) ((Literal) expr1).value());
     assertEquals(LiteralType.BYTES, ((Literal) expr1).type());
 
     final Parser parser2 = new Parser("B'test'");
     final Expression expr2 = parser2.parse();
-    assertEquals("test", ((Literal) expr2).value());
+    assertArrayEquals("test".getBytes(StandardCharsets.UTF_8), (byte[]) ((Literal) expr2).value());
     assertEquals(LiteralType.BYTES, ((Literal) expr2).type());
   }
 

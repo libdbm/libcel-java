@@ -1,7 +1,10 @@
 package com.libdbm.cel;
 
 import com.libdbm.cel.ast.*;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +45,10 @@ public class Interpreter implements Expression.Visitor<Object> {
     this(null, null);
   }
 
+  private static boolean isDecimal(final Object value) {
+    return value instanceof Double || value instanceof Float;
+  }
+
   /**
    * Evaluates a CEL expression and returns its result.
    *
@@ -62,6 +69,11 @@ public class Interpreter implements Expression.Visitor<Object> {
   @Override
   public Object visitIdentifier(final Identifier expr) {
     if (!variables.containsKey(expr.name())) {
+      // Bare type names resolve to type values unless a variable shadows them
+      final var type = Type.of(expr.name());
+      if (type != null) {
+        return type;
+      }
       throw new EvaluationError("Undefined variable: " + expr.name());
     }
     return variables.get(expr.name());
@@ -111,14 +123,14 @@ public class Interpreter implements Expression.Visitor<Object> {
       }
       final var name = ((Identifier) expression).name();
 
-      // Second argument is the expression (kept as AST)
+      // Remaining arguments are kept as unevaluated AST
       if (expr.args().size() < 2) {
         throw new EvaluationError("Macro " + expr.function() + " requires an expression argument");
       }
-      final var macro = expr.args().get(1);
+      final var steps = expr.args().subList(1, expr.args().size());
 
       // Handle each macro function
-      return evaluateMacro(target, expr.function(), name, macro);
+      return evaluateMacro(target, expr.function(), name, steps);
     }
 
     // Regular function call - evaluate all arguments
@@ -128,6 +140,13 @@ public class Interpreter implements Expression.Visitor<Object> {
     }
 
     if (expr.target() != null) {
+      final var namespace = qualify(expr.target());
+      if (namespace != null) {
+        final var qualified = namespace + "." + expr.function();
+        if (!variables.containsKey(root(namespace)) && functions.knows(qualified)) {
+          return functions.callFunction(qualified, args);
+        }
+      }
       final var target = evaluate(expr.target());
       return functions.callMethod(target, expr.function(), args);
     } else {
@@ -135,10 +154,32 @@ public class Interpreter implements Expression.Visitor<Object> {
     }
   }
 
+  // Flattens an identifier or a chain of selections over one into a dotted name, or null
+  private String qualify(final Expression expr) {
+    if (expr instanceof Identifier identifier) {
+      return identifier.name();
+    }
+    if (expr instanceof Select select && select.operand() != null && !select.isTest()) {
+      final var prefix = qualify(select.operand());
+      return prefix == null ? null : prefix + "." + select.field();
+    }
+    return null;
+  }
+
+  private String root(final String name) {
+    final var dot = name.indexOf('.');
+    return dot < 0 ? name : name.substring(0, dot);
+  }
+
   private Object evaluateMacro(
-      final Object target, final String function, final String name, final Expression expr) {
-    if (!(target instanceof List<?> list)) {
-      throw new EvaluationError("Macro " + function + " requires a list target");
+      final Object target, final String function, final String name, final List<Expression> steps) {
+    final List<?> list;
+    if (target instanceof List<?> values) {
+      list = values;
+    } else if (target instanceof Map<?, ?> map) {
+      list = new ArrayList<>(map.keySet());
+    } else {
+      throw new EvaluationError("Macro " + function + " requires a list or map target");
     }
 
     // Save the current value of the variable (if any)
@@ -148,10 +189,16 @@ public class Interpreter implements Expression.Visitor<Object> {
     try {
       switch (function) {
         case "map" -> {
+          // Optional second expression makes the first a predicate: map(x, filter, transform)
+          final var predicate = steps.size() > 1 ? steps.get(0) : null;
+          final var transform = steps.size() > 1 ? steps.get(1) : steps.get(0);
           final var results = new ArrayList<>();
           for (final Object item : list) {
             variables.put(name, item);
-            results.add(evaluate(expr));
+            if (predicate != null && !test(predicate, function)) {
+              continue;
+            }
+            results.add(evaluate(transform));
           }
           return results;
         }
@@ -159,8 +206,7 @@ public class Interpreter implements Expression.Visitor<Object> {
           final var results = new ArrayList<>();
           for (final Object item : list) {
             variables.put(name, item);
-            final Object condition = evaluate(expr);
-            if (Boolean.TRUE.equals(condition)) {
+            if (test(steps.get(0), function)) {
               results.add(item);
             }
           }
@@ -169,8 +215,7 @@ public class Interpreter implements Expression.Visitor<Object> {
         case "all" -> {
           for (final Object item : list) {
             variables.put(name, item);
-            final var condition = evaluate(expr);
-            if (!Boolean.TRUE.equals(condition)) {
+            if (!test(steps.get(0), function)) {
               return false;
             }
           }
@@ -179,8 +224,7 @@ public class Interpreter implements Expression.Visitor<Object> {
         case "exists" -> {
           for (final Object item : list) {
             variables.put(name, item);
-            final var condition = evaluate(expr);
-            if (Boolean.TRUE.equals(condition)) {
+            if (test(steps.get(0), function)) {
               return true;
             }
           }
@@ -190,8 +234,7 @@ public class Interpreter implements Expression.Visitor<Object> {
           var count = 0;
           for (final Object item : list) {
             variables.put(name, item);
-            final var condition = evaluate(expr);
-            if (Boolean.TRUE.equals(condition)) {
+            if (test(steps.get(0), function)) {
               count++;
               if (count > 1) {
                 return false;
@@ -199,6 +242,23 @@ public class Interpreter implements Expression.Visitor<Object> {
             }
           }
           return count == 1;
+        }
+        case "sortBy" -> {
+          final var keys = new ArrayList<Object>(list.size());
+          for (final Object item : list) {
+            variables.put(name, item);
+            keys.add(evaluate(steps.get(0)));
+          }
+          final var order = new ArrayList<Integer>(list.size());
+          for (var i = 0; i < list.size(); i++) {
+            order.add(i);
+          }
+          order.sort((left, right) -> Utilities.compare(keys.get(left), keys.get(right)));
+          final var results = new ArrayList<>(list.size());
+          for (final var index : order) {
+            results.add(list.get(index));
+          }
+          return results;
         }
         default -> throw new EvaluationError("Unknown macro function: " + function);
       }
@@ -210,6 +270,15 @@ public class Interpreter implements Expression.Visitor<Object> {
         variables.remove(name);
       }
     }
+  }
+
+  // Evaluates a macro predicate, which the specification requires to yield a boolean
+  private boolean test(final Expression expr, final String function) {
+    final var result = evaluate(expr);
+    if (!(result instanceof Boolean flag)) {
+      throw new EvaluationError("Macro " + function + " requires a boolean predicate");
+    }
+    return flag;
   }
 
   @Override
@@ -297,6 +366,9 @@ public class Interpreter implements Expression.Visitor<Object> {
       }
       case NEGATE -> {
         if (operand instanceof Long l) {
+          if (l == Long.MIN_VALUE) {
+            throw new EvaluationError("Integer overflow");
+          }
           yield -l;
         } else if (operand instanceof Integer i) {
           yield -(long) i;
@@ -304,6 +376,8 @@ public class Interpreter implements Expression.Visitor<Object> {
           yield -d;
         } else if (operand instanceof Float f) {
           yield -(double) f;
+        } else if (operand instanceof Duration span) {
+          yield span.negated();
         }
         throw new EvaluationError("Negation requires numeric operand");
       }
@@ -312,19 +386,11 @@ public class Interpreter implements Expression.Visitor<Object> {
 
   @Override
   public Object visitBinary(final Binary expr) {
-    // Short-circuit evaluation for logical operators
+    // Logical operators short-circuit and absorb errors from the other operand
     if (expr.op() == BinaryOp.LOGICAL_AND) {
-      final var left = evaluate(expr.left());
-      if (!Boolean.TRUE.equals(left)) {
-        return false;
-      }
-      return Boolean.TRUE.equals(evaluate(expr.right()));
+      return combine(expr, false);
     } else if (expr.op() == BinaryOp.LOGICAL_OR) {
-      final var left = evaluate(expr.left());
-      if (Boolean.TRUE.equals(left)) {
-        return true;
-      }
-      return Boolean.TRUE.equals(evaluate(expr.right()));
+      return combine(expr, true);
     }
 
     final var left = evaluate(expr.left());
@@ -332,12 +398,34 @@ public class Interpreter implements Expression.Visitor<Object> {
 
     return switch (expr.op()) {
       case ADD -> {
+        // Bytes concatenation
+        if (left instanceof byte[] l && right instanceof byte[] r) {
+          Utilities.limit((long) l.length + r.length, "Bytes concatenation");
+          final var result = new byte[l.length + r.length];
+          System.arraycopy(l, 0, result, 0, l.length);
+          System.arraycopy(r, 0, result, l.length, r.length);
+          yield result;
+        }
+        // Timestamp and duration arithmetic
+        if (left instanceof Instant l && right instanceof Duration r) {
+          yield l.plus(r);
+        }
+        if (left instanceof Duration l && right instanceof Instant r) {
+          yield r.plus(l);
+        }
+        if (left instanceof Duration l && right instanceof Duration r) {
+          yield l.plus(r);
+        }
         // String concatenation
         if (left instanceof String || right instanceof String) {
-          yield String.valueOf(left) + String.valueOf(right);
+          final var head = Utilities.asString(left);
+          final var tail = Utilities.asString(right);
+          Utilities.limit((long) head.length() + tail.length(), "String concatenation");
+          yield head + tail;
         }
         // List concatenation
         if (left instanceof List<?> l && right instanceof List<?> r) {
+          Utilities.limit((long) l.size() + r.size(), "List concatenation");
           final var result = new ArrayList<Object>(l);
           result.addAll(r);
           yield result;
@@ -349,6 +437,15 @@ public class Interpreter implements Expression.Visitor<Object> {
         throw new EvaluationError("Invalid operands for addition");
       }
       case SUBTRACT -> {
+        if (left instanceof Instant l && right instanceof Instant r) {
+          yield Duration.between(r, l);
+        }
+        if (left instanceof Instant l && right instanceof Duration r) {
+          yield l.minus(r);
+        }
+        if (left instanceof Duration l && right instanceof Duration r) {
+          yield l.minus(r);
+        }
         if (left instanceof Number && right instanceof Number) {
           yield subtractNumbers((Number) left, (Number) right);
         }
@@ -360,13 +457,14 @@ public class Interpreter implements Expression.Visitor<Object> {
         }
         // String repetition
         if (left instanceof String str && right instanceof Number num) {
-          yield str.repeat(num.intValue());
+          final var count = repetitions(num, str.length());
+          yield str.repeat(count);
         }
         // List repetition
         if (left instanceof List<?> list && right instanceof Number num) {
-          final var result = new ArrayList<>();
-          final var count = num.intValue();
-          for (int i = 0; i < count; i++) {
+          final var count = repetitions(num, list.size());
+          final var result = new ArrayList<>(count * list.size());
+          for (var i = 0; i < count; i++) {
             result.addAll(list);
           }
           yield result;
@@ -375,36 +473,32 @@ public class Interpreter implements Expression.Visitor<Object> {
       }
       case DIVIDE -> {
         if (left instanceof Number && right instanceof Number) {
-          final var value = ((Number) right).doubleValue();
-          if (value == 0.0) {
+          if (isDecimal(left) || isDecimal(right)) {
+            // Double division follows IEEE 754, so a zero divisor yields infinity or NaN
+            yield ((Number) left).doubleValue() / ((Number) right).doubleValue();
+          }
+          final var divisor = ((Number) right).longValue();
+          if (divisor == 0L) {
             throw new EvaluationError("Division by zero");
           }
-          // Division always returns double
-          yield ((Number) left).doubleValue() / value;
+          final var dividend = ((Number) left).longValue();
+          if (dividend == Long.MIN_VALUE && divisor == -1L) {
+            throw new EvaluationError("Integer overflow");
+          }
+          yield dividend / divisor;
         }
         throw new EvaluationError("Division requires numeric operands");
       }
       case MODULO -> {
-        if (left instanceof Long l && right instanceof Long r) {
-          if (r == 0L) {
+        if (left instanceof Number
+            && right instanceof Number
+            && !isDecimal(left)
+            && !isDecimal(right)) {
+          final var divisor = ((Number) right).longValue();
+          if (divisor == 0L) {
             throw new EvaluationError("Modulo by zero");
           }
-          yield l % r;
-        }
-        if (left instanceof Integer l && right instanceof Integer r) {
-          if (r == 0) {
-            throw new EvaluationError("Modulo by zero");
-          }
-          yield (long) (l % r);
-        }
-        // Try to convert to long
-        if (left instanceof Number && right instanceof Number) {
-          final var l = ((Number) left).longValue();
-          final var r = ((Number) right).longValue();
-          if (r == 0L) {
-            throw new EvaluationError("Modulo by zero");
-          }
-          yield l % r;
+          yield ((Number) left).longValue() % divisor;
         }
         throw new EvaluationError("Modulo requires integer operands");
       }
@@ -418,7 +512,7 @@ public class Interpreter implements Expression.Visitor<Object> {
         if (right instanceof List<?> list) {
           yield containsInList(list, left);
         } else if (right instanceof Map<?, ?> map) {
-          yield map.containsKey(left);
+          yield Utilities.contains(map, left);
         } else if (right instanceof String str && left instanceof String substr) {
           yield str.contains(substr);
         }
@@ -428,14 +522,46 @@ public class Interpreter implements Expression.Visitor<Object> {
     };
   }
 
+  // Evaluates a logical operator: the absorbing value wins even when the other operand errors
+  private Object combine(final Binary expr, final boolean absorbing) {
+    final var left = attempt(expr.left());
+    if (left instanceof Boolean flag && flag == absorbing) {
+      return absorbing;
+    }
+
+    final var right = attempt(expr.right());
+    if (right instanceof Boolean flag && flag == absorbing) {
+      return absorbing;
+    }
+
+    if (left instanceof RuntimeException error) {
+      throw error;
+    }
+    if (right instanceof RuntimeException error) {
+      throw error;
+    }
+    if (!(left instanceof Boolean) || !(right instanceof Boolean)) {
+      throw new EvaluationError("Logical operator " + expr.op() + " requires boolean operands");
+    }
+    return !absorbing;
+  }
+
+  // Evaluates an operand, returning the error instead of throwing it
+  private Object attempt(final Expression expr) {
+    try {
+      return evaluate(expr);
+    } catch (final EvaluationError | IllegalArgumentException error) {
+      return error;
+    }
+  }
+
   @Override
   public Object visitConditional(final Conditional expr) {
     final var condition = evaluate(expr.condition());
-    if (Boolean.TRUE.equals(condition)) {
-      return evaluate(expr.then());
-    } else {
-      return evaluate(expr.otherwise());
+    if (!(condition instanceof Boolean flag)) {
+      throw new EvaluationError("Conditional requires a boolean condition");
     }
+    return flag ? evaluate(expr.then()) : evaluate(expr.otherwise());
   }
 
   @Override
@@ -457,102 +583,84 @@ public class Interpreter implements Expression.Visitor<Object> {
       }
       return list.get(idx);
     } else if (operand instanceof Map<?, ?> map) {
-      if (!map.containsKey(index)) {
+      if (!Utilities.contains(map, index)) {
         throw new EvaluationError("Map key not found: " + index);
       }
-      return map.get(index);
+      return Utilities.select(map, index);
+    } else if (operand instanceof byte[] bytes) {
+      if (!(index instanceof Number)) {
+        throw new EvaluationError("Bytes index must be an integer");
+      }
+      final int at = ((Number) index).intValue();
+      if (at < 0 || at >= bytes.length) {
+        throw new EvaluationError("Bytes index out of bounds: " + at);
+      }
+      return (long) (bytes[at] & 0xFF);
     } else if (operand instanceof String str) {
       if (!(index instanceof Number)) {
         throw new EvaluationError("String index must be an integer");
       }
+      // Indexed by code point, so a supplementary character is one position and is never split
       final int idx = ((Number) index).intValue();
-      if (idx < 0 || idx >= str.length()) {
+      if (idx < 0 || idx >= str.codePointCount(0, str.length())) {
         throw new EvaluationError("String index out of bounds: " + idx);
       }
-      return String.valueOf(str.charAt(idx));
+      return new String(Character.toChars(str.codePointAt(str.offsetByCodePoints(0, idx))));
     }
 
     throw new EvaluationError("Cannot index type: " + operand.getClass().getName());
   }
 
+  // Validates a repetition count against the evaluation limit, before anything is allocated
+  private int repetitions(final Number count, final int width) {
+    final var repeats = count.longValue();
+    if (repeats < 0) {
+      throw new EvaluationError("Repetition count must not be negative: " + repeats);
+    }
+    // Bounding the count first keeps the product below the range of a long
+    if (repeats > Utilities.LIMIT || repeats * width > Utilities.LIMIT) {
+      throw new EvaluationError("Repetition exceeds the evaluation limit of " + Utilities.LIMIT);
+    }
+    return (int) repeats;
+  }
+
   // Helper methods for numeric operations
   private Number addNumbers(final Number left, final Number right) {
-    if (left instanceof Double
-        || right instanceof Double
-        || left instanceof Float
-        || right instanceof Float) {
+    if (isDecimal(left) || isDecimal(right)) {
       return left.doubleValue() + right.doubleValue();
     }
-    return left.longValue() + right.longValue();
+    try {
+      return Math.addExact(left.longValue(), right.longValue());
+    } catch (final ArithmeticException e) {
+      throw new EvaluationError("Integer overflow");
+    }
   }
 
   private Number subtractNumbers(final Number left, final Number right) {
-    if (left instanceof Double
-        || right instanceof Double
-        || left instanceof Float
-        || right instanceof Float) {
+    if (isDecimal(left) || isDecimal(right)) {
       return left.doubleValue() - right.doubleValue();
     }
-    return left.longValue() - right.longValue();
+    try {
+      return Math.subtractExact(left.longValue(), right.longValue());
+    } catch (final ArithmeticException e) {
+      throw new EvaluationError("Integer overflow");
+    }
   }
 
   private Number multiplyNumbers(final Number left, final Number right) {
-    if (left instanceof Double
-        || right instanceof Double
-        || left instanceof Float
-        || right instanceof Float) {
+    if (isDecimal(left) || isDecimal(right)) {
       return left.doubleValue() * right.doubleValue();
     }
-    return left.longValue() * right.longValue();
+    try {
+      return Math.multiplyExact(left.longValue(), right.longValue());
+    } catch (final ArithmeticException e) {
+      throw new EvaluationError("Integer overflow");
+    }
   }
 
   // Deep equality checking
   private boolean equals(final Object left, final Object right) {
-    if (left == null || right == null) {
-      return left == right;
-    }
-
-    if (left instanceof List<?> l && right instanceof List<?> r) {
-      if (l.size() != r.size()) {
-        return false;
-      }
-      for (int i = 0; i < l.size(); i++) {
-        if (!equals(l.get(i), r.get(i))) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (left instanceof Map<?, ?> l && right instanceof Map<?, ?> r) {
-      if (l.size() != r.size()) {
-        return false;
-      }
-      for (final var key : l.keySet()) {
-        if (!r.containsKey(key)) {
-          return false;
-        }
-        if (!equals(l.get(key), r.get(key))) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    // Numeric equality with type coercion
-    if (left instanceof Number ln && right instanceof Number rn) {
-      // If either is floating point, compare as doubles
-      if (ln instanceof Double
-          || ln instanceof Float
-          || rn instanceof Double
-          || rn instanceof Float) {
-        return ln.doubleValue() == rn.doubleValue();
-      }
-      // Otherwise compare as longs
-      return ln.longValue() == rn.longValue();
-    }
-
-    return left.equals(right);
+    return Utilities.equals(left, right);
   }
 
   // Helper for list contains with deep equality
@@ -577,14 +685,18 @@ public class Interpreter implements Expression.Visitor<Object> {
       return 1;
     }
 
-    if (left instanceof Number && right instanceof Number) {
-      final var l = ((Number) left).doubleValue();
-      final var r = ((Number) right).doubleValue();
-      return Double.compare(l, r);
+    if (left instanceof Number l && right instanceof Number r) {
+      return Utilities.order(l, r);
     } else if (left instanceof String && right instanceof String) {
       return ((String) left).compareTo((String) right);
     } else if (left instanceof Boolean && right instanceof Boolean) {
       return Boolean.compare((Boolean) left, (Boolean) right);
+    } else if (left instanceof Instant l && right instanceof Instant r) {
+      return l.compareTo(r);
+    } else if (left instanceof Duration l && right instanceof Duration r) {
+      return l.compareTo(r);
+    } else if (left instanceof byte[] l && right instanceof byte[] r) {
+      return Arrays.compare(l, r);
     } else if (left instanceof List<?> l && right instanceof List<?> r) {
       final int size = Math.min(l.size(), r.size());
       for (var i = 0; i < size; i++) {

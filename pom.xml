@@ -7,7 +7,7 @@
 
     <groupId>com.libdbm</groupId>
     <artifactId>libcel-java</artifactId>
-    <version>1.0.6-SNAPSHOT</version>
+    <version>2.0.0</version>
     <packaging>jar</packaging>
 
     <name>libcel-java</name>

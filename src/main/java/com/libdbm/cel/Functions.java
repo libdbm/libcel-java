@@ -1,9 +1,6 @@
 package com.libdbm.cel;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.List;
-import java.util.regex.Pattern;
 
 /**
  * Abstract interface for providing functions to CEL expressions.
@@ -17,11 +14,11 @@ import java.util.regex.Pattern;
  * <pre>{@code
  * class MyFunctions extends StandardFunctions {
  *   @Override
- *   public Object call(final String name, final List<Object> args) {
+ *   public Object callFunction(final String name, final List<Object> args) {
  *     if (name.equals("customFunc")) {
  *       return myCustomImplementation(args);
  *     }
- *     return super.call(name, args);
+ *     return super.callFunction(name, args);
  *   }
  * }
  * }</pre>
@@ -47,5 +44,18 @@ public interface Functions {
    * @throws IllegalArgumentException if the method is not found or if the arguments are invalid.
    */
   Object callMethod(final Object target, final String method, final List<Object> args);
-}
 
+  /**
+   * Reports whether this library provides a qualified global function with the given name.
+   *
+   * <p>The interpreter uses this to resolve namespaced calls such as {@code math.greatest(1, 2)},
+   * which would otherwise be parsed as a field selection followed by a method call. Only names that
+   * are not shadowed by a bound variable are ever tested.
+   *
+   * @param name the qualified function name, for example "math.greatest"
+   * @return true if the name should be dispatched to callFunction
+   */
+  default boolean knows(final String name) {
+    return false;
+  }
+}

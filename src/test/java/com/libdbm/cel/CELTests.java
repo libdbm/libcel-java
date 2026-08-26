@@ -3,6 +3,7 @@ package com.libdbm.cel;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.libdbm.cel.parser.ParseError;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -71,10 +72,12 @@ class CELTests {
 
     @Test
     void parsesBytesLiteralsWithUppercaseBPrefix() {
-      assertEquals("hello", cel.eval("b\"hello\"", Map.of()));
-      assertEquals("hello", cel.eval("B\"hello\"", Map.of()));
-      assertEquals("world", cel.eval("b'world'", Map.of()));
-      assertEquals("world", cel.eval("B'world'", Map.of()));
+      final var hello = "hello".getBytes(StandardCharsets.UTF_8);
+      final var world = "world".getBytes(StandardCharsets.UTF_8);
+      assertArrayEquals(hello, (byte[]) cel.eval("b\"hello\"", Map.of()));
+      assertArrayEquals(hello, (byte[]) cel.eval("B\"hello\"", Map.of()));
+      assertArrayEquals(world, (byte[]) cel.eval("b'world'", Map.of()));
+      assertArrayEquals(world, (byte[]) cel.eval("B'world'", Map.of()));
     }
 
     @Test
@@ -117,7 +120,8 @@ class CELTests {
       assertEquals(5L, cel.eval("2 + 3", Map.of()));
       assertEquals(6L, cel.eval("10 - 4", Map.of()));
       assertEquals(12L, cel.eval("3 * 4", Map.of()));
-      assertEquals(5.0, cel.eval("15 / 3", Map.of()));
+      assertEquals(5L, cel.eval("15 / 3", Map.of()));
+      assertEquals(5.0, cel.eval("15.0 / 3", Map.of()));
       assertEquals(2L, cel.eval("17 % 5", Map.of()));
     }
 
@@ -188,8 +192,8 @@ class CELTests {
 
     @Test
     void parsesFunctionCalls() {
-      assertEquals(5, cel.eval("size(\"hello\")", Map.of()));
-      assertEquals(3, cel.eval("size([1, 2, 3])", Map.of()));
+      assertEquals(5L, cel.eval("size(\"hello\")", Map.of()));
+      assertEquals(3L, cel.eval("size([1, 2, 3])", Map.of()));
       assertEquals(42L, cel.eval("int(\"42\")", Map.of()));
       assertEquals("42", cel.eval("string(42)", Map.of()));
     }
@@ -321,13 +325,17 @@ class CELTests {
 
     @Test
     void evalTypeFunction() {
-      assertEquals("null", cel.eval("type(null)", Map.of()));
-      assertEquals("bool", cel.eval("type(true)", Map.of()));
-      assertEquals("int", cel.eval("type(42)", Map.of()));
-      assertEquals("double", cel.eval("type(3.14)", Map.of()));
-      assertEquals("string", cel.eval("type(\"hello\")", Map.of()));
-      assertEquals("list", cel.eval("type([1, 2])", Map.of()));
-      assertEquals("map", cel.eval("type({\"a\": 1})", Map.of()));
+      assertEquals(Type.NULL, cel.eval("type(null)", Map.of()));
+      assertEquals(Type.BOOL, cel.eval("type(true)", Map.of()));
+      assertEquals(Type.INT, cel.eval("type(42)", Map.of()));
+      assertEquals(Type.DOUBLE, cel.eval("type(3.14)", Map.of()));
+      assertEquals(Type.STRING, cel.eval("type(\"hello\")", Map.of()));
+      assertEquals(Type.LIST, cel.eval("type([1, 2])", Map.of()));
+      assertEquals(Type.MAP, cel.eval("type({\"a\": 1})", Map.of()));
+
+      // Type values are also bound as identifiers, so the specification form works
+      assertTrue((Boolean) cel.eval("type(42) == int", Map.of()));
+      assertTrue((Boolean) cel.eval("type(type(42)) == type", Map.of()));
     }
 
     @Test
@@ -690,7 +698,7 @@ class CELTests {
       void canUseMacrosInExpressions() {
         final Map<String, Object> data =
             Map.of("lists", List.of(List.of(1L, 2L), List.of(3L, 4L), List.of(5L)));
-        assertEquals(List.of(2, 2, 1), cel.eval("lists.map(l, size(l))", data));
+        assertEquals(List.of(2L, 2L, 1L), cel.eval("lists.map(l, size(l))", data));
 
         @SuppressWarnings("unchecked")
         final List<List<Long>> result =

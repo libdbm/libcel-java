@@ -29,7 +29,8 @@ class InterpreterTests {
     assertEquals(7L, eval("3 + 4"));
     assertEquals(12L, eval("3 * 4"));
     assertEquals(1L, eval("5 - 4"));
-    assertEquals(2.5, eval("5 / 2"));
+    assertEquals(2L, eval("5 / 2"));
+    assertEquals(2.5, eval("5.0 / 2"));
     assertEquals(1L, eval("5 % 2"));
   }
 
@@ -210,8 +211,8 @@ class InterpreterTests {
 
     final Interpreter interp = new Interpreter(vars, null);
 
-    assertEquals(5, interp.evaluate(new Parser("size(text)").parse()));
-    assertEquals(3, interp.evaluate(new Parser("size(items)").parse()));
+    assertEquals(5L, interp.evaluate(new Parser("size(text)").parse()));
+    assertEquals(3L, interp.evaluate(new Parser("size(items)").parse()));
     assertEquals(true, interp.evaluate(new Parser("text.contains(\"ell\")").parse()));
     assertEquals(true, interp.evaluate(new Parser("text.startsWith(\"hel\")").parse()));
     assertEquals(true, interp.evaluate(new Parser("text.endsWith(\"lo\")").parse()));

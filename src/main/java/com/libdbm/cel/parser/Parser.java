@@ -1,6 +1,8 @@
 package com.libdbm.cel.parser;
 
 import com.libdbm.cel.ast.*;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -59,7 +61,7 @@ enum TokenType {
  */
 public class Parser {
   private static final Set<String> MACRO_METHODS =
-      Set.of("map", "filter", "all", "exists", "existsOne");
+      Set.of("map", "filter", "all", "exists", "existsOne", "sortBy");
   private static final int MAX_DEPTH = 256;
 
   private final Lexer lexer;
@@ -290,9 +292,14 @@ public class Parser {
 
       // Function call
       if (current.type() == TokenType.LPAREN) {
+        final var line = current.line();
+        final var column = current.column();
         advance();
         final var args = parseExprList();
         expect(TokenType.RPAREN);
+        if (name.equals("has") && args.size() == 1) {
+          return test(args.get(0), line, column);
+        }
         return new Call(null, name, args);
       }
 
@@ -315,6 +322,14 @@ public class Parser {
   }
 
   // listLiteral = '[' exprList? ','? ']'
+  // Rewrites the has() macro into a presence test on the selected field
+  private Expression test(final Expression expr, final int line, final int column) {
+    if (expr instanceof Select select) {
+      return new Select(select.operand(), select.field(), true);
+    }
+    throw new ParseError("has() requires a field selection, for example has(a.b)", line, column);
+  }
+
   private Expression parseListLiteral() {
     expect(TokenType.LBRACKET);
 
@@ -509,10 +524,88 @@ public class Parser {
     return content;
   }
 
-  private String parseBytesLiteral(final String value) {
+  private byte[] parseBytesLiteral(final String value) {
     // Remove b"..." or B'...' wrapper and process escapes
     final var content = value.substring(2, value.length() - 1);
-    return unescapeString(content);
+    return unescapeBytes(content);
+  }
+
+  private byte[] unescapeBytes(final String value) {
+    final var result = new ByteArrayOutputStream();
+    final var pending = new StringBuilder();
+    int i = 0;
+
+    while (i < value.length()) {
+      if (value.charAt(i) != '\\' || i + 1 >= value.length()) {
+        pending.append(value.charAt(i));
+        i++;
+        continue;
+      }
+
+      final var next = value.charAt(i + 1);
+      final var simple = simpleEscape(next);
+      if (simple >= 0) {
+        pending.append((char) simple);
+        i += 2;
+      } else if (next == 'x' && i + 4 <= value.length()) {
+        flush(pending, result);
+        result.write(Integer.parseInt(value.substring(i + 2, i + 4), 16));
+        i += 4;
+      } else if (next == 'u' && i + 6 <= value.length()) {
+        pending.append((char) Integer.parseInt(value.substring(i + 2, i + 6), 16));
+        i += 6;
+      } else if (next == 'U' && i + 10 <= value.length()) {
+        pending.appendCodePoint(Integer.parseInt(value.substring(i + 2, i + 10), 16));
+        i += 10;
+      } else if (isOctal(value, i)) {
+        flush(pending, result);
+        result.write(Integer.parseInt(value.substring(i + 1, i + 4), 8));
+        i += 4;
+      } else {
+        pending.append(value.charAt(i));
+        i++;
+      }
+    }
+
+    flush(pending, result);
+    return result.toByteArray();
+  }
+
+  private void flush(final StringBuilder pending, final ByteArrayOutputStream target) {
+    if (pending.isEmpty()) {
+      return;
+    }
+    final var encoded = pending.toString().getBytes(StandardCharsets.UTF_8);
+    target.write(encoded, 0, encoded.length);
+    pending.setLength(0);
+  }
+
+  private int simpleEscape(final char value) {
+    return switch (value) {
+      case '\\' -> '\\';
+      case '"' -> '"';
+      case '\'' -> '\'';
+      case '`' -> '`';
+      case '?' -> '?';
+      case 'a' -> 0x07;
+      case 'b' -> '\b';
+      case 'f' -> '\f';
+      case 'n' -> '\n';
+      case 'r' -> '\r';
+      case 't' -> '\t';
+      case 'v' -> 0x0B;
+      default -> -1;
+    };
+  }
+
+  private boolean isOctal(final String value, final int index) {
+    return index + 3 < value.length()
+        && value.charAt(index + 1) >= '0'
+        && value.charAt(index + 1) <= '3'
+        && value.charAt(index + 2) >= '0'
+        && value.charAt(index + 2) <= '7'
+        && value.charAt(index + 3) >= '0'
+        && value.charAt(index + 3) <= '7';
   }
 
   private String unescapeString(final String value) {
